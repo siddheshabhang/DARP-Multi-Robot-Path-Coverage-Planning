@@ -115,8 +115,14 @@ class InteractiveGrid:
             self.obstacles.remove(position)
             self.grid[position[0], position[1]] = 0
     
-    def assign_territories_simple(self):
-        """Simple territory assignment based on distance."""
+    def assign_territories_voronoi(self):
+        """
+        Voronoi-based territory assignment using Euclidean distance.
+        
+        This implements the initial partitioning step of the DARP algorithm,
+        where each cell is assigned to the nearest robot based on Euclidean distance,
+        forming a classical Voronoi diagram.
+        """
         for i in range(self.rows):
             for j in range(self.cols):
                 if self.grid[i, j] != -1:  # Not an obstacle
@@ -125,7 +131,8 @@ class InteractiveGrid:
                     
                     for idx, robot in enumerate(self.robot_positions):
                         r_row, r_col = robot['position']
-                        dist = abs(i - r_row) + abs(j - r_col)  # Manhattan distance
+                        # Euclidean distance as used in DARP algorithm
+                        dist = np.sqrt((i - r_row)**2 + (j - r_col)**2)
                         
                         if dist < min_dist:
                             min_dist = dist
@@ -272,10 +279,10 @@ class InteractiveGrid:
                         for robot in self.robot_positions:
                             robot['territory'].clear()
                     elif event.key == pygame.K_a:
-                        # Auto assign territories
+                        # Auto assign territories using Voronoi partitioning
                         for robot in self.robot_positions:
                             robot['territory'].clear()
-                        self.assign_territories_simple()
+                        self.assign_territories_voronoi()
             
             # Draw everything
             self.screen.fill(COLORS['background'])
@@ -310,8 +317,8 @@ def demo():
     for obs in obstacles:
         grid.add_obstacle(obs)
     
-    # Assign territories
-    grid.assign_territories_simple()
+    # Assign territories using Voronoi partitioning (DARP initial step)
+    grid.assign_territories_voronoi()
     
     # Run the visualization
     grid.run()

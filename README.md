@@ -81,7 +81,8 @@ This is the **initial setup** for the semester project. Future extensions will i
 - [x] Basic territory assignment
 
 ### Phase 2: Algorithm Enhancement (Weeks 4-8)
-- [ ] Implement complete DARP algorithm
+- [x] Implement Voronoi-based initial partitioning (Euclidean distance)
+- [ ] Implement complete DARP iterative refinement
 - [ ] Add dynamic obstacle detection
 - [ ] Optimize territory reallocation
 - [ ] Path planning with turn minimization
