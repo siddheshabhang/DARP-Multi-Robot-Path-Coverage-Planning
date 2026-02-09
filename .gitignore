@@ -1,0 +1,17 @@
+# DARP-Semester-Project
+*.pyc
+__pycache__/
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+venv/
+.env
+.DS_Store
+.ipynb_checkpoints/
+*.swp
+*.swo
+*~
+.vscode/
+.idea/

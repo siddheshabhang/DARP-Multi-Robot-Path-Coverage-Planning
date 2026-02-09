@@ -1,0 +1,11 @@
+numpy>=1.24.0
+opencv-python>=4.8.0
+pygame>=2.5.0
+scipy>=1.11.0
+matplotlib>=3.7.0
+jupyter>=1.0.0
+numba>=0.58.0
+nose>=1.3.7
+parameterized>=0.8.1
+scikit-learn
+Pillow>=10.0.0
