@@ -1,22 +1,14 @@
-"""
-Interactive Grid-based Visualization for Multi-Robot Path Planning
-Based on DARP (Divide Areas Algorithm for Optimal Multi-Robot Coverage Path Planning)
-
-This module provides an interactive pygame-based visualization for demonstrating
-multi-robot path planning algorithms with real-time animation.
-"""
-
 import pygame
 import numpy as np
 import sys
 from typing import List, Tuple, Optional
+from darp_algorithm import DARPPartitioner
 
-# Color definitions for a modern, professional look
 COLORS = {
-    'background': (15, 23, 42),      # Dark slate background
-    'grid_line': (51, 65, 85),        # Subtle grid lines
-    'obstacle': (239, 68, 68),        # Red for obstacles
-    'free_cell': (248, 250, 252),     # Light gray for free cells
+    'background': (15, 23, 42),
+    'grid_line': (51, 65, 85),
+    'obstacle': (239, 68, 68),
+    'free_cell': (248, 250, 252),
     'robot_colors': [
         (59, 130, 246),   # Blue
         (34, 197, 94),    # Green
@@ -38,59 +30,47 @@ COLORS = {
 
 
 class InteractiveGrid:
-    """
-    Interactive grid visualization for multi-robot path planning.
-    
-    Features:
-    - Real-time visualization of robot territories
-    - Interactive obstacle placement (click to add/remove)
-    - Animated robot movement
-    - Coverage statistics display
-    """
-    
     def __init__(self, rows: int = 15, cols: int = 15, cell_size: int = 40):
-        """
-        Initialize the interactive grid visualization.
-        
-        Args:
-            rows: Number of rows in the grid
-            cols: Number of columns in the grid
-            cell_size: Size of each cell in pixels
-        """
         pygame.init()
-        
+
         self.rows = rows
         self.cols = cols
         self.cell_size = cell_size
-        
-        # Calculate window dimensions
+
         self.info_panel_width = 300
         self.grid_width = cols * cell_size
         self.grid_height = rows * cell_size
         self.window_width = self.grid_width + self.info_panel_width
-        self.window_height = self.grid_height + 100  # Extra space for title
-        
-        # Create window
+        self.window_height = self.grid_height + 100
+
         self.screen = pygame.display.set_mode((self.window_width, self.window_height))
         pygame.display.set_caption("Multi-Robot Path Planning Visualization")
-        
-        # Initialize fonts
+
         self.title_font = pygame.font.Font(None, 48)
         self.font = pygame.font.Font(None, 28)
         self.small_font = pygame.font.Font(None, 20)
-        
+
         # Grid state
-        self.grid = np.zeros((rows, cols), dtype=int)  # 0: free, -1: obstacle, >0: robot territory
+        self.grid = np.zeros((rows, cols), dtype=int)
         self.obstacles = set()
         self.robot_positions = []
         self.paths = []
-        
-        # Animation
+
         self.clock = pygame.time.Clock()
         self.running = True
-        
+
+        # DARP animation state
+        self.darp: Optional[DARPPartitioner] = None
+        self.darp_running = False         # True while optimizing
+        self.darp_done = False            # True after optimization finished
+        self.darp_phase = ""              # "voronoi" or "balancing"
+        self.iteration_count = 0
+        self.stall_count = 0
+        self.converged = False
+        self.anim_delay_ms = 80           # ms between balance steps
+
+    # ---- robots / obstacles ----
     def add_robot(self, position: Tuple[int, int], color_idx: int = 0):
-        """Add a robot at the specified position."""
         row, col = position
         if 0 <= row < self.rows and 0 <= col < self.cols:
             self.robot_positions.append({
@@ -100,227 +80,304 @@ class InteractiveGrid:
                 'path': []
             })
             self.grid[row, col] = len(self.robot_positions)
-    
+
     def add_obstacle(self, position: Tuple[int, int]):
-        """Add an obstacle at the specified position."""
         row, col = position
         if 0 <= row < self.rows and 0 <= col < self.cols:
-            if (row, col) not in [(r['position']) for r in self.robot_positions]:
+            if (row, col) not in [r['position'] for r in self.robot_positions]:
                 self.obstacles.add((row, col))
                 self.grid[row, col] = -1
-    
+
     def remove_obstacle(self, position: Tuple[int, int]):
-        """Remove an obstacle at the specified position."""
         if position in self.obstacles:
             self.obstacles.remove(position)
             self.grid[position[0], position[1]] = 0
-    
-    def assign_territories_voronoi(self):
-        """
-        Voronoi-based territory assignment using Euclidean distance.
-        
-        This implements the initial partitioning step of the DARP algorithm,
-        where each cell is assigned to the nearest robot based on Euclidean distance,
-        forming a classical Voronoi diagram.
-        """
+
+    # ---- DARP helpers ----
+    def _sync_territories_from_darp(self):
+        """Copy grid from partitioner into self.grid and update territory sets."""
+        self.grid = self.darp.grid.copy()
+        for idx, robot in enumerate(self.robot_positions):
+            robot['territory'] = set()
+            rid = idx + 1
+            for i in range(self.rows):
+                for j in range(self.cols):
+                    if self.grid[i, j] == rid:
+                        robot['territory'].add((i, j))
+
+    def start_darp(self):
+        """Kick off an animated DARP run."""
+        # Reset the grid keeping obstacles
         for i in range(self.rows):
             for j in range(self.cols):
-                if self.grid[i, j] != -1:  # Not an obstacle
-                    min_dist = float('inf')
-                    assigned_robot = 0
-                    
-                    for idx, robot in enumerate(self.robot_positions):
-                        r_row, r_col = robot['position']
-                        # Euclidean distance as used in DARP algorithm
-                        dist = np.sqrt((i - r_row)**2 + (j - r_col)**2)
-                        
-                        if dist < min_dist:
-                            min_dist = dist
-                            assigned_robot = idx + 1
-                    
-                    if assigned_robot > 0:
-                        self.grid[i, j] = assigned_robot
-                        self.robot_positions[assigned_robot - 1]['territory'].add((i, j))
-    
+                if self.grid[i, j] > 0:
+                    self.grid[i, j] = 0
+        # Re-place robot IDs
+        for idx, r in enumerate(self.robot_positions):
+            self.grid[r['position'][0], r['position'][1]] = idx + 1
+
+        robot_pos_list = [r['position'] for r in self.robot_positions]
+        self.darp = DARPPartitioner(
+            grid=self.grid,
+            robot_positions=robot_pos_list,
+            max_iterations=500,
+            balance_tolerance=0.05,
+            connectivity=4
+        )
+
+        # Phase 1: Voronoi
+        self.darp.initial_voronoi_partition()
+        self._sync_territories_from_darp()
+
+        print("\n🤖 DARP started — Voronoi partition applied")
+        print(f"   Sizes: {self.darp.get_territory_sizes()}")
+
+        self.darp_running = True
+        self.darp_done = False
+        self.darp_phase = "balancing"
+        self.iteration_count = 0
+        self.stall_count = 0
+        self.converged = False
+        self._last_step_time = pygame.time.get_ticks()
+
+    def darp_tick(self):
+        """Called every frame while DARP is running. Does one balance step
+        if enough time has passed, so the user can watch the process."""
+        now = pygame.time.get_ticks()
+        if now - self._last_step_time < self.anim_delay_ms:
+            return
+
+        self._last_step_time = now
+
+        # Check convergence
+        if self.darp.is_converged():
+            self._finish_darp("✓ Converged")
+            return
+
+        if self.iteration_count >= self.darp.max_iterations:
+            self._finish_darp("✓ Max iterations reached")
+            return
+
+        changed = self.darp.balance_step()
+        self.iteration_count += 1
+
+        if changed:
+            self.stall_count = 0
+            self._sync_territories_from_darp()
+        else:
+            self.stall_count += 1
+            if self.stall_count > 30:
+                self._finish_darp("✓ Stalled (no more moves)")
+                return
+
+        if self.iteration_count % 10 == 0:
+            print(f"  Iter {self.iteration_count}: "
+                  f"sizes = {self.darp.get_territory_sizes()}")
+
+    def _finish_darp(self, reason: str):
+        self.darp.iteration_count = self.iteration_count
+        self.converged = self.darp.is_converged()
+        self.darp_running = False
+        self.darp_done = True
+        self._sync_territories_from_darp()
+        sizes = self.darp.get_territory_sizes()
+        print(f"\n{reason} after {self.iteration_count} iterations")
+        print(f"   Final sizes: {sizes}")
+        # Print matrices to terminal
+        self.darp.print_matrices()
+
+    # ---- drawing ----
     def draw_grid(self):
-        """Draw the grid with territories and obstacles."""
-        # Draw cells
         for i in range(self.rows):
             for j in range(self.cols):
                 x = j * self.cell_size
-                y = i * self.cell_size + 80  # Offset for title
-                
-                # Determine cell color
+                y = i * self.cell_size + 80
+
                 if (i, j) in self.obstacles:
                     color = COLORS['obstacle']
                 elif self.grid[i, j] > 0:
-                    robot_idx = self.grid[i, j] - 1
-                    if robot_idx < len(COLORS['path_colors']):
-                        color = COLORS['path_colors'][robot_idx]
-                    else:
-                        color = COLORS['free_cell']
+                    ridx = self.grid[i, j] - 1
+                    color = COLORS['path_colors'][ridx % len(COLORS['path_colors'])]
                 else:
                     color = COLORS['free_cell']
-                
-                # Draw cell
-                pygame.draw.rect(self.screen, color, (x, y, self.cell_size, self.cell_size))
-                pygame.draw.rect(self.screen, COLORS['grid_line'], (x, y, self.cell_size, self.cell_size), 1)
-        
-        # Draw robots
+
+                pygame.draw.rect(self.screen, color,
+                                 (x, y, self.cell_size, self.cell_size))
+                pygame.draw.rect(self.screen, COLORS['grid_line'],
+                                 (x, y, self.cell_size, self.cell_size), 1)
+
+        # Robots
         for idx, robot in enumerate(self.robot_positions):
             row, col = robot['position']
-            x = col * self.cell_size + self.cell_size // 2
-            y = row * self.cell_size + 80 + self.cell_size // 2
-            
-            if idx < len(COLORS['robot_colors']):
-                color = COLORS['robot_colors'][idx]
-            else:
-                color = COLORS['highlight']
-            
-            # Draw robot as circle
-            pygame.draw.circle(self.screen, color, (x, y), self.cell_size // 3)
-            pygame.draw.circle(self.screen, COLORS['text'], (x, y), self.cell_size // 3, 2)
-            
-            # Draw robot number
-            robot_text = self.font.render(str(idx + 1), True, COLORS['text'])
-            text_rect = robot_text.get_rect(center=(x, y))
-            self.screen.blit(robot_text, text_rect)
-    
+            cx = col * self.cell_size + self.cell_size // 2
+            cy = row * self.cell_size + 80 + self.cell_size // 2
+            c = COLORS['robot_colors'][idx % len(COLORS['robot_colors'])]
+            pygame.draw.circle(self.screen, c, (cx, cy), self.cell_size // 3)
+            pygame.draw.circle(self.screen, COLORS['text'], (cx, cy),
+                               self.cell_size // 3, 2)
+            txt = self.font.render(str(idx + 1), True, COLORS['text'])
+            self.screen.blit(txt, txt.get_rect(center=(cx, cy)))
+
     def draw_info_panel(self):
-        """Draw information panel on the right side."""
-        panel_x = self.grid_width
-        panel_y = 80
-        
-        # Draw panel background
-        pygame.draw.rect(self.screen, COLORS['panel_bg'], 
-                        (panel_x, panel_y, self.info_panel_width, self.grid_height))
-        
-        # Title
-        y_offset = panel_y + 20
-        title = self.font.render("Statistics", True, COLORS['text'])
-        self.screen.blit(title, (panel_x + 20, y_offset))
-        y_offset += 50
-        
-        # Robot statistics
+        px = self.grid_width
+        py = 80
+        pygame.draw.rect(self.screen, COLORS['panel_bg'],
+                         (px, py, self.info_panel_width, self.grid_height))
+
+        y = py + 20
+        self.screen.blit(self.font.render("Statistics", True, COLORS['text']),
+                         (px + 20, y))
+        y += 50
+
+        # DARP status
+        if self.darp_running:
+            self.screen.blit(
+                self.small_font.render("DARP: running...", True, COLORS['highlight']),
+                (px + 20, y))
+            y += 22
+            self.screen.blit(
+                self.small_font.render(f"  Iteration: {self.iteration_count}",
+                                       True, COLORS['text']),
+                (px + 30, y))
+            y += 30
+        elif self.darp_done:
+            self.screen.blit(
+                self.small_font.render("DARP: done", True, COLORS['highlight']),
+                (px + 20, y))
+            y += 22
+            self.screen.blit(
+                self.small_font.render(f"  Iterations: {self.iteration_count}",
+                                       True, COLORS['text']),
+                (px + 30, y))
+            y += 20
+            tag = "Yes ✓" if self.converged else "No"
+            self.screen.blit(
+                self.small_font.render(f"  Converged: {tag}",
+                                       True, COLORS['text']),
+                (px + 30, y))
+            y += 30
+
+        # Per-robot
         for idx, robot in enumerate(self.robot_positions):
-            if idx < len(COLORS['robot_colors']):
-                color = COLORS['robot_colors'][idx]
-            else:
-                color = COLORS['highlight']
-            
-            # Draw colored indicator
-            pygame.draw.circle(self.screen, color, 
-                             (panel_x + 30, y_offset + 10), 8)
-            
-            # Robot info
-            text = self.small_font.render(f"Robot {idx + 1}", True, COLORS['text'])
-            self.screen.blit(text, (panel_x + 50, y_offset))
-            y_offset += 25
-            
-            # Territory size
-            territory_size = len(robot['territory'])
-            text = self.small_font.render(f"  Territory: {territory_size} cells", 
-                                         True, COLORS['text'])
-            self.screen.blit(text, (panel_x + 50, y_offset))
-            y_offset += 35
-        
-        # Instructions
-        y_offset = self.window_height - 180
-        instructions = [
-            "Controls:",
-            "Click: Add/Remove Obstacle",
-            "R: Reset Grid",
-            "A: Auto Assign",
-            "ESC: Quit"
-        ]
-        
-        for instruction in instructions:
-            text = self.small_font.render(instruction, True, COLORS['text'])
-            self.screen.blit(text, (panel_x + 20, y_offset))
-            y_offset += 25
-    
+            c = COLORS['robot_colors'][idx % len(COLORS['robot_colors'])]
+            pygame.draw.circle(self.screen, c, (px + 30, y + 10), 8)
+            self.screen.blit(
+                self.small_font.render(f"Robot {idx+1}", True, COLORS['text']),
+                (px + 50, y))
+            y += 25
+            n = len(robot['territory'])
+            self.screen.blit(
+                self.small_font.render(f"  Cells: {n}", True, COLORS['text']),
+                (px + 50, y))
+            y += 30
+
+        # Controls
+        y = self.window_height - 180
+        for line in ["Controls:",
+                      "Click: Add/Remove Obstacle",
+                      "R: Reset Grid",
+                      "D: Run DARP (animated)",
+                      "A: Simple Voronoi",
+                      "ESC: Quit"]:
+            self.screen.blit(
+                self.small_font.render(line, True, COLORS['text']),
+                (px + 20, y))
+            y += 25
+
     def draw_title(self):
-        """Draw the title at the top."""
-        title = self.title_font.render("Multi-Robot Path Planning", True, COLORS['text'])
-        title_rect = title.get_rect(center=(self.window_width // 2, 40))
-        self.screen.blit(title, title_rect)
-    
-    def handle_click(self, pos: Tuple[int, int]):
-        """Handle mouse click events."""
+        t = self.title_font.render("Multi-Robot Path Planning", True, COLORS['text'])
+        self.screen.blit(t, t.get_rect(center=(self.window_width // 2, 40)))
+
+    # ---- events ----
+    def handle_click(self, pos):
         x, y = pos
-        
-        # Only handle clicks in grid area
         if x < self.grid_width and y >= 80:
             col = x // self.cell_size
             row = (y - 80) // self.cell_size
-            
             if 0 <= row < self.rows and 0 <= col < self.cols:
                 if (row, col) in self.obstacles:
                     self.remove_obstacle((row, col))
                 elif (row, col) not in [r['position'] for r in self.robot_positions]:
                     self.add_obstacle((row, col))
-    
+
+    # ---- main loop ----
     def run(self):
-        """Main loop for the visualization."""
         while self.running:
-            # Handle events
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     self.running = False
                 elif event.type == pygame.MOUSEBUTTONDOWN:
-                    self.handle_click(pygame.mouse.get_pos())
+                    if not self.darp_running:
+                        self.handle_click(pygame.mouse.get_pos())
                 elif event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_ESCAPE:
                         self.running = False
                     elif event.key == pygame.K_r:
-                        # Reset grid
                         self.grid = np.zeros((self.rows, self.cols), dtype=int)
                         self.obstacles.clear()
-                        for robot in self.robot_positions:
-                            robot['territory'].clear()
-                    elif event.key == pygame.K_a:
-                        # Auto assign territories using Voronoi partitioning
-                        for robot in self.robot_positions:
-                            robot['territory'].clear()
-                        self.assign_territories_voronoi()
-            
-            # Draw everything
+                        for r in self.robot_positions:
+                            r['territory'].clear()
+                        self.darp_running = False
+                        self.darp_done = False
+                        self.iteration_count = 0
+                    elif event.key == pygame.K_d and not self.darp_running:
+                        self.start_darp()
+                    elif event.key == pygame.K_a and not self.darp_running:
+                        for r in self.robot_positions:
+                            r['territory'].clear()
+                        self._simple_voronoi()
+                        self.darp_done = False
+
+            # Animated DARP step
+            if self.darp_running:
+                self.darp_tick()
+
+            # Draw
             self.screen.fill(COLORS['background'])
             self.draw_title()
             self.draw_grid()
             self.draw_info_panel()
-            
             pygame.display.flip()
-            self.clock.tick(60)  # 60 FPS
-        
+            self.clock.tick(60)
+
         pygame.quit()
+
+    def _simple_voronoi(self):
+        """Quick Voronoi for the A key (no DARP)."""
+        for i in range(self.rows):
+            for j in range(self.cols):
+                if self.grid[i, j] == -1:
+                    continue
+                best, bd = 0, float('inf')
+                for idx, r in enumerate(self.robot_positions):
+                    rr, rc = r['position']
+                    d = np.sqrt((i - rr)**2 + (j - rc)**2)
+                    if d < bd:
+                        bd = d
+                        best = idx + 1
+                self.grid[i, j] = best
+                self.robot_positions[best - 1]['territory'].add((i, j))
 
 
 def demo():
-    """Run a demo of the interactive grid visualization."""
-    # Create a 15x15 grid
     grid = InteractiveGrid(rows=15, cols=15, cell_size=40)
-    
-    # Add 3 robots at different positions
-    grid.add_robot((2, 2), color_idx=0)    # Robot 1 - Blue
+
+    grid.add_robot((0, 0), color_idx=0)   # Robot 1 - Blue
     grid.add_robot((7, 12), color_idx=1)   # Robot 2 - Green
     grid.add_robot((12, 7), color_idx=2)   # Robot 3 - Purple
-    
-    # Add some initial obstacles to show the concept
+
     obstacles = [
         (5, 5), (5, 6), (5, 7),
         (6, 5), (6, 6), (6, 7),
         (10, 3), (10, 4), (10, 5),
         (3, 10), (4, 10), (5, 10),
     ]
-    
     for obs in obstacles:
         grid.add_obstacle(obs)
-    
-    # Assign territories using Voronoi partitioning (DARP initial step)
-    grid.assign_territories_voronoi()
-    
-    # Run the visualization
+
+    # Auto-start DARP so the process is visible immediately
+    grid.start_darp()
+
     grid.run()
 
 

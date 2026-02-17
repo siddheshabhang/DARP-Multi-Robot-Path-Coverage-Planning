@@ -6,9 +6,12 @@ This project extends the DARP (Divide Areas Algorithm for Optimal Multi-Robot Co
 
 ## ✨ Features
 
+- **DARP Optimal Partitioning**: Complete implementation with Euclidean distance matrix convergence
 - **Interactive Grid Visualization**: Real-time pygame-based visualization with smooth animations
-- **Multi-Robot Territory Assignment**: Automatic territory division based on proximity
+- **Multi-Robot Territory Assignment**: Automatic territory division with iterative optimization
+- **Distance Matrix Output**: View initial and optimized Euclidean distance matrices in terminal
 - **Dynamic Obstacle Placement**: Click to add/remove obstacles in real-time
+- **Convergence Metrics**: Live tracking of territory costs, balance, and optimization progress
 - **Statistics Dashboard**: Live coverage metrics and robot performance data
 - **Professional UI**: Modern color scheme with intuitive controls
 
@@ -36,7 +39,8 @@ This will launch an interactive window showing 3 robots dividing a 15x15 grid te
 | Key | Action |
 |-----|--------|
 | **Click** | Add or remove obstacles |
-| **A** | Auto-assign territories to robots |
+| **D** | Run DARP optimization (with matrix output) |
+| **A** | Simple Voronoi partitioning |
 | **R** | Reset the grid |
 | **ESC** | Quit the application |
 
@@ -46,17 +50,27 @@ The visualization demo includes:
 - 3 robots positioned at strategic locations
 - Pre-placed obstacle patterns to demonstrate avoidance
 - Color-coded territories (Blue, Green, Purple)
-- Real-time statistics panel showing coverage data
+- Real-time statistics panel showing:
+  - Territory sizes for each robot
+  - Territory costs (sum of squared distances)
+  - Optimization iterations and convergence status
+- **Terminal output** of Euclidean distance matrices:
+  - Initial matrices before optimization
+  - Optimized matrices after convergence
+  - Distance statistics (mean, std dev) for each robot
+  - Cost improvement metrics
 
 ## 🛠️ Project Structure
 
 ```
 DARP-Semester-Project/
 ├── visualization_demo.py    # Main interactive visualization
-├── requirements.txt          # Python dependencies
-├── run.sh                   # Execution script
-├── venv/                    # Virtual environment
-└── README.md               # This file
+├── darp_algorithm.py        # Core DARP partitioning algorithm
+├── test_darp.py            # Standalone test (no GUI)
+├── requirements.txt         # Python dependencies
+├── run.sh                  # Execution script
+├── venv/                   # Virtual environment
+└── README.md              # This file
 ```
 
 ## 📦 Dependencies
@@ -82,9 +96,11 @@ This is the **initial setup** for the semester project. Future extensions will i
 
 ### Phase 2: Algorithm Enhancement (Weeks 4-8)
 - [x] Implement Voronoi-based initial partitioning (Euclidean distance)
-- [ ] Implement complete DARP iterative refinement
-- [ ] Add dynamic obstacle detection
-- [ ] Optimize territory reallocation
+- [x] Implement complete DARP iterative refinement
+- [x] Euclidean distance matrix computation and convergence
+- [x] Territory cost optimization with connectivity preservation
+- [x] Terminal output of distance matrices
+- [ ] Dynamic obstacle detection
 - [ ] Path planning with turn minimization
 
 ### Phase 3: Advanced Features (Weeks 9-12)
@@ -101,15 +117,17 @@ This is the **initial setup** for the semester project. Future extensions will i
 
 ## 💡 Usage Examples
 
-### Basic Run
+### Interactive Visualization
 ```bash
 ./run.sh visualization_demo.py
+# Press 'D' to run DARP optimization
+# Watch the terminal for distance matrix output
 ```
 
-### Future: Run with Custom Configuration
+### Terminal-Only Test (No GUI)
 ```bash
-# Coming soon: parameterized runs
-./run.sh main.py --robots 4 --grid 20x20 --obstacles random
+./run.sh test_darp.py
+# Runs DARP algorithm and prints matrices to console
 ```
 
 ## 🎓 Academic Context
@@ -125,7 +143,13 @@ Perfect for presenting to professors and demonstrating understanding of robotics
 
 ## 📝 Notes
 
-> **For Professor Demo**: Run `./run.sh visualization_demo.py` to see the interactive simulation. Click to place obstacles, press 'A' to auto-assign territories, and watch the robots divide the workspace!
+> **For Professor Demo**: Run `./run.sh visualization_demo.py`, then press **'D'** to run DARP optimization. The terminal will display:
+> - Initial Euclidean distance matrices for each robot
+> - Optimized matrices after convergence
+> - Territory cost improvements
+> - Convergence metrics and iteration count
+>
+> The visualization window shows real-time territory assignment with detailed statistics!
 
 ## 🔧 Troubleshooting
 
