@@ -37,7 +37,7 @@ def test_darp_algorithm():
         robot_positions=robot_positions,
         max_iterations=500,
         balance_tolerance=0.05,
-        connectivity=4
+        connectivity=8
     )
 
     results = part.optimize_partition(verbose=True)
